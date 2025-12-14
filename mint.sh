@@ -1,48 +1,68 @@
 #!/bin/bash
 
-# 1. 載入環境變數
+# ===================================================
+# 0. 環境準備 (直接讀取 .env)
+# ===================================================
+
+# 檢查 .env 檔案
 if [ -f .env ]; then
     source .env
 else
-    echo "❌ 找不到 .env 檔案。請先執行 ./deploy.sh"
+    echo "❌ 錯誤: 找不到 .env 檔案"
     exit 1
 fi
 
-# 檢查變數是否存在
-if [ -z "$PACKAGE_ID" ]; then
-    echo "❌ .env 中找不到 PACKAGE_ID"
-    exit 1
+# 檢查 PACKAGE_ID
+if [ -z "$PACKAGE_ID" ]; then 
+    echo "❌ 錯誤: .env 中找不到 PACKAGE_ID" 
+    exit 1 
 fi
 
-echo "🎨 正在呼叫 Mint 函數..."
-echo "目標 Package: $PACKAGE_ID"
+# [關鍵修正] 直接從 .env 讀取 VAULT_ID，不再使用 iota client objects 搜尋
+if [ -z "$VAULT_ID" ]; then 
+    echo "❌ 錯誤: .env 中找不到 VAULT_ID"
+    echo "   請確認您已使用最新版的 ./deploy.sh 重新部署合約。"
+    exit 1 
+else
+    echo "✅ 讀取 Vault ID: $VAULT_ID"
+fi
 
-# 定義參數
-MODULE_NAME="pic_display"
-FUNC_NAME="mint"
-# 這裡只傳入名字，圖片 URL 由合約內部的隨機邏輯生成
-ARG_NAME="Lucky Hero #$(date +%s)" 
+# ===================================================
+# 1. 執行鑄造
+# ===================================================
 
-# 2. 執行交易
-# 注意：--args 只需要傳入名字字串
-RESULT=$(iota client call \
+NFT_NAME="Lucky User #$(date +%s)"
+
+echo "🎨 正在從 Vault 提取資金並鑄造 NFT: '$NFT_NAME'..."
+
+# 呼叫 Mint 函數
+# 參數 1: Vault ID (Shared Object)
+# 參數 2: NFT 名稱
+MINT_RES=$(iota client call \
     --package "$PACKAGE_ID" \
-    --module "$MODULE_NAME" \
-    --function "$FUNC_NAME" \
-    --args "$ARG_NAME" \
-    --gas-budget 30000000 \
+    --module "pic_display" \
+    --function "mint" \
+    --args "$VAULT_ID" "$NFT_NAME" \
+    --gas-budget 50000000 \
     --json)
 
-# 3. 解析結果，抓取新生成的 NFT ID
 if [ $? -eq 0 ]; then
-    echo "✅ 鑄造成功！"
+    # 解析新產生的 NFT ID
+    NFT_ID=$(echo "$MINT_RES" | jq -r --arg PKG "$PACKAGE_ID" '
+        .objectChanges[] | 
+        select(.type == "created") | 
+        select(.objectType | contains($PKG + "::pic_display::Awesome_NFT")) | 
+        .objectId
+    ')
     
-    # 抓取新創建的物件 ID (created object)
-    OBJECT_ID=$(echo "$RESULT" | jq -r '.objectChanges[] | select(.type == "created") | .objectId' | head -n 1)
-    
-    echo "🖼️  NFT Object ID: $OBJECT_ID"
-    echo "您可以到 Explorer 查看此物件。"
+    echo "=================================================="
+    echo "🎉 鑄造成功！"
+    echo "🖼️  NFT Object ID: $NFT_ID"
+    echo "💰 已自動從 Vault 獲取 50 AWESOME 代幣"
+    echo "👉 請至 Explorer 查看該 NFT 的 Display 與 Balance"
+    echo "=================================================="
 else
-    echo "❌ 交易失敗"
-    echo "$RESULT"
+    echo "❌ 鑄造失敗"
+    # 嘗試印出錯誤訊息
+    echo "$MINT_RES" | grep "error" | head -n 5
 fi
